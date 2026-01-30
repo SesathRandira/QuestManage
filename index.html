@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quest Bot Dashboard</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="theme-color" content="#1e90ff">
+<style>
+body { font-family:'Segoe UI',sans-serif; background:linear-gradient(135deg,#232526 0%,#414345 100%); color:#fff; margin:0; padding:0; }
+.appbar { background:linear-gradient(90deg,#1e90ff,#00e6e6); color:#fff; padding:18px 0 12px 0; text-align:center; font-size:2.1rem; font-weight:700; letter-spacing:2px; box-shadow:0 2px 12px #0003; position:sticky; top:0; z-index:10; }
+#controls { display:flex; flex-wrap:wrap; justify-content:center; gap:12px; margin:24px 0 18px 0; }
+input, select, button { padding:12px 16px; border-radius:10px; border:none; outline:none; font-size:1rem; }
+button { cursor:pointer; background:linear-gradient(90deg,#1e90ff,#00e6e6); color:#fff; font-weight:600; box-shadow:0 2px 8px #0002; transition:0.2s; border:none; }
+button:hover { background:linear-gradient(90deg,#187bcd,#00b3b3); transform:translateY(-2px) scale(1.04); }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:24px; padding:0 16px 80px 16px; }
+.card { background:rgba(30,30,30,0.97); border-radius:18px; padding:22px 18px; position:relative; display:flex; flex-direction:column; gap:7px; box-shadow:0 4px 24px #0004; transition: box-shadow 0.2s, transform 0.2s; }
+.card:hover { box-shadow:0 8px 32px #1e90ff44; transform: scale(1.025); }
+.card h2 { margin:0; font-size:1.25rem; font-weight:700; letter-spacing:1px; }
+.card a { color:#1e90ff; text-decoration:none; font-weight:600; }
+.card a:hover { text-decoration:underline; color:#00e6e6; }
+.card p { margin:2px 0; font-size:1rem; color:#e0e0e0; }
+.reward { margin-top:10px; font-weight:bold; font-size:1.08rem; color:#ffe066; }
+.card-buttons { margin-top:12px; display:flex; gap:10px; }
+.card-buttons button { flex:1; font-size:0.95rem; border-radius:8px; }
+#addQuestForm { background:rgba(30,30,30,0.97); padding:18px; border-radius:18px; display:flex; flex-wrap:wrap; gap:12px; margin:0 16px 24px 16px; box-shadow:0 2px 12px #0002; }
+#addQuestForm input, #addQuestForm button { flex:1 1 140px; }
+.hidden { display:none !important; }
+#search { min-width:220px; }
+.fab {
+  position:fixed; right:24px; bottom:24px; z-index:100;
+  width:64px; height:64px; border-radius:50%;
+  background:linear-gradient(135deg,#1e90ff,#00e6e6);
+  color:#fff; font-size:2.5rem; display:flex; align-items:center; justify-content:center;
+  box-shadow:0 4px 24px #1e90ff55; border:none; cursor:pointer; transition:0.2s;
+}
+.fab:hover { background:linear-gradient(135deg,#187bcd,#00b3b3); }
+@media(max-width:600px){
+  #addQuestForm input,#addQuestForm button{ flex:1 1 100%; }
+  .grid{ grid-template-columns:1fr; }
+  .card{ padding:14px 8px; }
+  .fab { width:54px; height:54px; font-size:2rem; right:12px; bottom:12px; }
+}
+</style>
+</head>
+<body>
+
+<div class="appbar">Quest Bot Dashboard</div>
+
+<div id="controls">
+  <input type="text" id="search" placeholder="Search quests or platform...">
+  <button id="deleteAll">Delete All Quests</button>
+  <button id="exportJSON">Copy Discord JSON</button>
+</div>
+
+<div id="addQuestForm">
+  <input type="text" id="name" placeholder="Quest Name" required>
+  <input type="url" id="url" placeholder="Quest URL" required>
+  <input type="datetime-local" id="start" placeholder="Start Date" required>
+  <input type="datetime-local" id="end" placeholder="End Date" required>
+  <input type="text" id="reward" placeholder="Reward" required>
+  <input type="text" id="platform" placeholder="Platform" required>
+  <button id="addQuest">Add / Update Quest</button>
+</div>
+
+
+<div class="grid" id="questGrid"></div>
+
+<button class="fab" id="showFormBtn" title="Add Quest">+</button>
+
+<script>
+  // PWA: Register service worker
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('service-worker.js');
+    });
+  }
+
+  // Floating Action Button toggles form
+  const fab = document.getElementById('showFormBtn');
+  const addForm = document.getElementById('addQuestForm');
+  fab.addEventListener('click', () => {
+    addForm.classList.toggle('hidden');
+    if (!addForm.classList.contains('hidden')) {
+      addForm.scrollIntoView({behavior:'smooth'});
+    }
+  });
+  // Hide form by default on mobile
+  if(window.innerWidth<700){ addForm.classList.add('hidden'); }
+  // ---------- Helpers ---------- //
+  function discordTimestamp(dateInput, style='R'){
+    let dateObj = typeof dateInput==='string'? new Date(dateInput):dateInput;
+    if(!(dateObj instanceof Date)||isNaN(dateObj.getTime())) return '';
+    return `<t:${Math.floor(dateObj.getTime()/1000)}:${style}>`;
+  }
+
+  function getStoredQuests(){ return JSON.parse(localStorage.getItem('quests')||'[]'); }
+  function saveQuests(qs){ localStorage.setItem('quests', JSON.stringify(qs)); }
+
+  let quests = getStoredQuests();
+  let editIndex = null;
+  const grid = document.getElementById('questGrid');
+
+  // ---------- Remove expired ---------- //
+  function removeExpiredQuests(){
+    const now = new Date();
+    quests = quests.filter(q=>new Date(q.end)>now);
+    saveQuests(quests);
+  }
+
+  // ---------- Render ---------- //
+  function renderQuests(list){
+    removeExpiredQuests(); // auto-remove before rendering
+
+    grid.innerHTML='';
+    if(!quests.length){ grid.innerHTML='<p style="text-align:center;">No quests available</p>'; return; }
+
+    quests.forEach((q,index)=>{
+      const card=document.createElement('div');
+      card.className='card';
+      const startDate=new Date(q.start);
+      const endDate=new Date(q.end);
+      card.innerHTML=`
+        <h2><a href="${q.url}" target="_blank">${q.name}</a></h2>
+        <p>Start: ${startDate.toLocaleString()}</p>
+        <p>End: ${endDate.toLocaleString()}</p>
+        <p>Platform: ${q.platform}</p>
+        <div class="reward">${q.reward}</div>
+        <div class="card-buttons">
+          <button onclick="editQuest(${index})">Edit</button>
+          <button onclick="inlineEditQuest(${index})">Inline Edit</button>
+          <button onclick="deleteQuest(${index})" style="background:#ff4c4c;">Delete</button>
+        </div>
+      `;
+      grid.appendChild(card);
+    });
+  }
+
+  // ---------- Auto-remove expired every second ----------
+  setInterval(renderQuests, 1000);
+
+  // ---------- Search ---------- //
+  document.getElementById('search').addEventListener('input', e=>{
+    const term=e.target.value.toLowerCase();
+    renderQuests(quests.filter(q=>q.name.toLowerCase().includes(term)||q.platform.toLowerCase().includes(term)));
+  });
+
+  // ---------- Delete ---------- //
+  document.getElementById('deleteAll').addEventListener('click', ()=>{
+    if(confirm("Delete all quests?")){ quests=[]; saveQuests(quests); renderQuests(quests); }
+  });
+  function deleteQuest(index){
+    if(confirm("Delete this quest?")){ quests.splice(index,1); saveQuests(quests); renderQuests(quests); }
+  }
+
+  // ---------- Add / Edit ---------- //
+  const addBtn=document.getElementById('addQuest');
+  addBtn.addEventListener('click', ()=>{
+    const name=document.getElementById('name').value.trim();
+    const url=document.getElementById('url').value.trim();
+    const start=document.getElementById('start').value;
+    const end=document.getElementById('end').value;
+    const reward=document.getElementById('reward').value.trim();
+    const platform=document.getElementById('platform').value.trim();
+    if(!name||!url||!start||!end||!reward||!platform){alert('Fill all fields!'); return;}
+    const questData={name,url,start,end,reward,platform};
+    if(editIndex!==null){ quests[editIndex]=questData; editIndex=null; addBtn.textContent='Add / Update Quest'; }
+    else quests.push(questData);
+    saveQuests(quests); renderQuests(quests); document.getElementById('addQuestForm').reset();
+  });
+
+  function editQuest(index){
+    const q=quests[index];
+    document.getElementById('name').value=q.name;
+    document.getElementById('url').value=q.url;
+    document.getElementById('start').value=q.start;
+    document.getElementById('end').value=q.end;
+    document.getElementById('reward').value=q.reward;
+    document.getElementById('platform').value=q.platform;
+    editIndex=index;
+    addBtn.textContent='Update Quest';
+  }
+
+  // ---------- Inline Edit ---------- //
+  function inlineEditQuest(index){
+    const card=grid.children[index];
+    card.innerHTML=`
+      <input type="text" id="editName${index}" value="${quests[index].name}" style="margin-bottom:4px;">
+      <input type="url" id="editUrl${index}" value="${quests[index].url}" style="margin-bottom:4px;">
+      <input type="datetime-local" id="editStart${index}" value="${quests[index].start}" style="margin-bottom:4px;">
+      <input type="datetime-local" id="editEnd${index}" value="${quests[index].end}" style="margin-bottom:4px;">
+      <input type="text" id="editReward${index}" value="${quests[index].reward}" style="margin-bottom:4px;">
+      <input type="text" id="editPlatform${index}" value="${quests[index].platform}" style="margin-bottom:4px;">
+      <div class="card-buttons">
+        <button onclick="saveInlineEdit(${index})">Save</button>
+        <button onclick="renderQuests(quests)">Cancel</button>
+      </div>
+    `;
+  }
+
+  function saveInlineEdit(index){
+    const name=document.getElementById(`editName${index}`).value.trim();
+    const url=document.getElementById(`editUrl${index}`).value.trim();
+    const start=document.getElementById(`editStart${index}`).value;
+    const end=document.getElementById(`editEnd${index}`).value;
+    const reward=document.getElementById(`editReward${index}`).value.trim();
+    const platform=document.getElementById(`editPlatform${index}`).value.trim();
+    if(!name||!url||!start||!end||!reward||!platform){alert('Fill all fields!'); return;}
+    quests[index]={name,url,start,end,reward,platform};
+    saveQuests(quests); renderQuests(quests);
+  }
+
+  // ---------- Export Discord JSON ---------- //
+  document.getElementById('exportJSON').addEventListener('click', ()=>{
+    const discordReady = quests.map(q=>({
+      ...q,
+      start: discordTimestamp(q.start),
+      end: discordTimestamp(q.end)
+    }));
+    navigator.clipboard.writeText(JSON.stringify(discordReady,null,2))
+      .then(()=>alert('Discord-ready JSON copied!'))
+      .catch(()=>alert('Failed to copy.'));
+  });
+</script>
+</body>
+</html>
